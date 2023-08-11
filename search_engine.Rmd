@@ -1,0 +1,163 @@
+---
+title: "Apartment Search Engine"
+author: "Linus Backström"
+date: "2023-08-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+# LOADING PACKAGES
+library(geosphere) # for distHaversine function
+library(sf) # for reading GeoPackage file
+library(tidyverse)
+library(leaflet)
+```
+
+```{r}
+# LOADING DATA
+
+# Load df of sold apartments
+apartments <- read.csv('data/apartments.csv', encoding = 'UTF-8')
+
+# Load geospatial data for public transport stops
+HSL_stops <- st_read("data/HSL_stops.gpkg")
+```
+
+```{r}
+# CALCULATING DISTANCES
+
+# Define the "center" as the Three Smiths Statue
+Helsinki_center <- data.frame(oc_lat = c(60.168683),
+                         oc_lng = c(24.940967))
+# These coordinates are used to calculate "distance_to_center"
+# and they can be changed to any desired location
+
+# Calculate distance from each apartment to the city center defined above
+apartments$distance_to_center <- distHaversine(
+  p1 = cbind(apartments$oc_lng, apartments$oc_lat),
+  p2 = cbind(Helsinki_center$oc_lng, Helsinki_center$oc_lat)
+)
+
+# Create vector to store the closest distances to stops
+shortest_distances <- vector("numeric", length = nrow(apartments))
+
+# Loop through each row in the "apartments" df
+for (i in 1:nrow(apartments)) {
+  # Calculate distance to each public transport stop found in the "HSL_stops" df, 
+  distances_to_stops <- distHaversine(cbind(apartments[i, "oc_lng"], apartments[i, "oc_lat"]),
+                                      cbind(HSL_stops$lon, HSL_stops$lat))
+  # Select only the shortest distance stop for each apartment
+  shortest_distances[i] <- min(distances_to_stops)
+}
+
+# Add the distances to the closest stops as a column in the "apartments" df
+apartments$distance_to_closest_stop <- shortest_distances
+```
+
+```{r}
+# Create function to filter and display search results
+show_options <- function(data,
+                         stops_data,
+                         min_price,
+                         max_price,
+                         min_area,
+                         max_area,
+                         min_ppsm,
+                         max_ppsm,
+                         property_conditions,
+                         min_distance_to_center,
+                         max_distance_to_center,
+                         min_distance_to_stop,
+                         max_distance_to_stop) {
+  
+  # Filter results based on search conditions
+  selection <- apartments %>%
+    
+    filter(Price >= min_price & Price <= max_price) %>% 
+    filter(Area >= min_area & Area <= max_area) %>%
+    filter(PPSM >= min_ppsm & PPSM <= max_ppsm) %>%
+    filter(Property_condition %in% chosen_property_conditions) %>%
+    filter(distance_to_center >= min_distance_to_center & distance_to_center <= max_distance_to_center) %>%
+    filter(distance_to_closest_stop >= min_distance_to_stop & distance_to_closest_stop <= max_distance_to_stop)
+  
+  # Append the filtered rows to a dataframe called "search_results"
+  search_results <<- selection
+  
+  # Display message if no results are found
+  if (nrow(selection) == 0) {
+    
+    print("No results were found based on the given criteria. Please adjust your search criteria.")
+    
+  } else {
+    
+    mymap <- leaflet() %>%
+      addTiles() %>% 
+      setView(
+        lng = mean(apartments$oc_lng), 
+        lat = mean(apartments$oc_lat),
+        zoom = 12)
+    
+    for (i in seq_len(nrow(selection))) {
+      lat <- selection$oc_lat[i]
+      lon <- selection$oc_lng[i]
+      price <- selection$Price[i]
+      address <- selection$Address[i]
+      
+      mymap <- mymap %>%
+        addMarkers(lng = lon, 
+                   lat = lat,
+                   popup = paste0(address,
+                                  ", ",
+                                  format(price, big.mark = " "),
+                                  " €"))
+    }
+    
+    mymap
+    
+  }
+}
+```
+
+```{r}
+# DEFINE SEARCH CONDITIONS
+# The values on the right side of the arrow can be adjusted based on preference
+# The default settings are set to include all apartments in the current dataset
+
+# Budget (€)
+chosen_min_price <- 0
+chosen_max_price <- 1705000
+# Living area (m²)
+chosen_min_area <- 55 
+chosen_max_area <- 100
+# Price per square meter (€/m²)
+chosen_min_ppsm <- 0
+chosen_max_ppsm <- 18730
+# Property condition (New/Excellent/Good/Satisfactory/Adequate/Unknown)
+chosen_property_conditions <- c('New', 'Excellent', 'Good', 'Satisfactory', 'Adequate', 'Unknown')
+# Distance to city center (m)
+chosen_min_distance_to_center <- 0
+chosen_max_distance_to_center <- 5700
+# Distance to closest public transport stop (m)
+chosen_min_distance_to_stop <- 0
+chosen_max_distance_to_stop <- 575
+
+# PERFORM SEARCH         
+show_options(apartments,
+             HSL_stops,
+             chosen_min_price,
+             chosen_max_price,
+             chosen_min_area,
+             chosen_max_area,
+             chosen_min_ppsm,
+             chosen_max_ppsm,
+             chosen_property_conditions,
+             chosen_min_distance_to_center,
+             chosen_max_distance_to_center,
+             chosen_min_distance_to_stop,
+             chosen_max_distance_to_stop)
+```
+

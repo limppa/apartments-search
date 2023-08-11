@@ -1,0 +1,106 @@
+---
+title: "Preprocessing"
+author: "Linus Backström"
+date: "2023-08-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(opencage)
+library(tidyverse)
+library(leaflet)
+library(dplyr)
+```
+
+```{r}
+# Set OpenCage API key
+Sys.setenv(OPENCAGE_KEY = "insert_your_API_key_here")
+```
+
+```{r}
+# Load data
+df <- read.csv2('data/apartment sales 2019-2023.csv', encoding = 'UTF-8')
+
+# Convert Sell_date column to date type with corrected format
+df$Sell_date <- as.Date(df$Sell_date, format = "%d.%m.%Y")
+
+# Several apartments were sold more than once during the time frame
+# Remove duplicate apartments, keeping the ones with the more recent sell date
+df <- df %>%
+  group_by(Address) %>%
+  arrange(desc(Sell_date)) %>%
+  slice(1) %>%
+  filter(Address != "")
+
+# Append city information to addresses
+# to avoid finding addresses from other cities during later steps
+df$Address_with_city <- paste(df$Address, ", 00", df$Postal_code, ", Helsinki, Finland", sep = "")
+```
+
+```{r}
+# GEOCODING
+
+# Process in batches to avoid starting everything over in case of problems
+batch_size <- 100  # Set the desired batch size
+
+# Determine the number of batches
+num_batches <- ceiling(nrow(df) / batch_size)
+
+# Create an empty dataframe to store geocoded results
+df_geocoded <- data.frame()
+
+# Process the geocoding in batches
+for (batch in 1:num_batches) {
+  start_index <- (batch - 1) * batch_size + 1
+  end_index <- min(start_index + batch_size - 1, nrow(df))
+  
+  batch_data <- df[start_index:end_index, ]
+  
+  # Perform geocoding on the batch data
+  tryCatch({
+    batch_geocoded <- oc_forward_df(placename = batch_data$Address_with_city, countrycode = "FI", limit = 1, no_annotations = TRUE)
+    
+    # Append the geocoded results to the main dataframe
+    df_geocoded <- rbind(df_geocoded, batch_geocoded)
+  }, error = function(e) {
+    cat("Error occurred in batch:", batch, "\n")
+    # Display error message
+  })
+}
+
+# Save to .csv as backup
+write_csv(df_geocoded, 'data/apartment_coordinates.csv')
+```
+
+```{r}
+# Combine the original df with the geocoded one
+apartments <- cbind(df, df_geocoded)
+
+# Save to .csv as backup
+write_csv(apartments, 'apartments.csv')
+```
+
+```{r}
+# Convert columns to appropriate classes and fix formatting
+apartments$Address <- as.character(apartments$Address)
+apartments$Postal_code <- as.factor(apartments$Postal_code)
+apartments$Price <- as.numeric(gsub("[^0-9.]", "", apartments$Price))
+apartments$Area <- as.numeric(gsub("[^0-9.]", "", apartments$Area))
+apartments$Area <- apartments$Area/10 # fixing mistake with decimal separator
+apartments$PPSM <- as.numeric(gsub("[^0-9.]", "", apartments$PPSM))
+apartments$Property_condition <- factor(apartments$Property_condition,
+                                        levels = c("New", "Excellent", "Good", "Satisfactory", "Adequate", "Unknown"))
+apartments$Sell_date <- as.Date(apartments$Sell_date)
+apartments$Address_with_city <- as.character(apartments$Address_with_city)
+apartments$oc_lat <- as.numeric(apartments$oc_lat)
+apartments$oc_lng <- as.numeric(apartments$oc_lng)
+
+# Remove redundant columns
+apartments <- apartments[, !(names(apartments) %in% c("placename", "oc_formatted"))]
+
+# Save to .csv as backup
+write_csv(apartments, 'data/apartments.csv')
+```
+
